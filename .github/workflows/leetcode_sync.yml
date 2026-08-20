@@ -1,0 +1,70 @@
+name: Sync LeetCode Submissions
+
+on:
+  workflow_dispatch: # Allows manual triggering
+  schedule:
+    - cron: "0 0 * * *" # Runs automatically every day at midnight UTC
+
+jobs:
+  refresh-cookies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.5.0
+        with:
+          node-version: "24"
+
+      - name: Check if current cookies still work
+        id: check
+        env:
+          LEETCODE_SESSION: ${{ secrets.LEETCODE_SESSION }}
+          LEETCODE_CSRF_TOKEN: ${{ secrets.LEETCODE_CSRF_TOKEN }}
+        run: node .github/scripts/check-cookies.js
+
+      # Everything below only runs when the check above found the cookies
+      # invalid/expired — most days this whole block is skipped, which
+      # means no Playwright login and far less exposure to bot-detection.
+
+      - name: Install Playwright
+        if: steps.check.outputs.valid != 'true'
+        run: npm install playwright
+
+      - name: Install Playwright browsers
+        if: steps.check.outputs.valid != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Log in and refresh LeetCode session cookies
+        if: steps.check.outputs.valid != 'true'
+        env:
+          LEETCODE_USERNAME: ${{ secrets.LEETCODE_USERNAME }}
+          LEETCODE_PASSWORD: ${{ secrets.LEETCODE_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_SECRETS_PAT }}
+          GH_SECRETS_PAT: ${{ secrets.GH_SECRETS_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node .github/scripts/refresh-cookies.js
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-failure-screenshot
+          path: login-failure.png
+          if-no-files-found: ignore
+
+  sync:
+    needs: refresh-cookies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Run LeetCode Sync
+        uses: joshcai/leetcode-sync@v1.7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          leetcode-csrf-token: ${{ secrets.LEETCODE_CSRF_TOKEN }}
+          leetcode-session: ${{ secrets.LEETCODE_SESSION }}
+          verbose: false
+          commit-header: "Sync LeetCode submissions"
